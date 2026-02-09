@@ -1,1 +1,3 @@
-pip install streamlit streamlit-cropper Pillow
+streamlit
+streamlit-cropper
+Pillow
