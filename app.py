@@ -7,7 +7,13 @@ import zipfile
 # Page Config
 st.set_page_config(layout="wide", page_title="Batch Image Cropper")
 
-# Custom CSS for better layout
+# --- Session State Initialization ---
+# We use this to track the coordinates so we can update them
+# via both the slider/mouse AND the manual text inputs.
+if 'crop_coords' not in st.session_state:
+    st.session_state.crop_coords = None 
+
+# Custom CSS
 st.markdown("""
     <style>
     .stButton>button {
@@ -19,13 +25,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("✂️ Interactive Batch Image Cropper")
-st.markdown("""
-**Instructions:**
-1. Upload your batch of images.
-2. Adjust settings (Rotation & Aspect Ratio) in the sidebar.
-3. Draw your crop box on the **Reference Image**.
-4. Click **"Crop All & Download"** to process the entire batch.
-""")
 
 # --- 1. File Upload ---
 uploaded_files = st.file_uploader(
@@ -35,133 +34,146 @@ uploaded_files = st.file_uploader(
 )
 
 if uploaded_files:
-    # --- 2. Sidebar Controls ---
+    # Map filenames to file objects
+    img_map = {f.name: f for f in uploaded_files}
+
+    # --- 2. Sidebar Settings ---
     st.sidebar.header("⚙️ Settings")
 
     # A. Select Reference Image
-    # We use this image to define the crop box for the whole batch
-    img_map = {f.name: f for f in uploaded_files}
     ref_img_name = st.sidebar.selectbox(
-        "Select Reference Image (for preview)", 
+        "Select Reference Image", 
         list(img_map.keys()),
         index=0
     )
     ref_file = img_map[ref_img_name]
-    
-    # Load the image
     raw_image = Image.open(ref_file)
-
-    # B. Rotation Tool
-    st.sidebar.subheader("Rotation")
-    rotate_angle = st.sidebar.slider("Rotate (Degrees)", -180, 180, 0, 1)
     
-    # Apply rotation to the preview immediately
+    # B. Rotation
+    rotate_angle = st.sidebar.slider("Rotate (Degrees)", -180, 180, 0, 1)
     if rotate_angle != 0:
-        # expand=True ensures we don't cut off corners when rotating
         processed_image = raw_image.rotate(-rotate_angle, expand=True)
     else:
         processed_image = raw_image
 
-    # C. Aspect Ratio Lock
-    st.sidebar.subheader("Crop Box Ratio")
-    aspect_choice = st.sidebar.radio(
-        "Lock Aspect Ratio", 
-        ["Free", "1:1 (Square)", "16:9", "4:3"]
-    )
-    
-    aspect_ratio = None
-    if aspect_choice == "1:1 (Square)":
-        aspect_ratio = (1, 1)
-    elif aspect_choice == "16:9":
-        aspect_ratio = (16, 9)
-    elif aspect_choice == "4:3":
-        aspect_ratio = (4, 3)
+    img_w, img_h = processed_image.size
 
-    # --- 3. Interactive Cropper ---
+    # --- 3. Manual Coordinate Inputs (The new feature) ---
+    st.sidebar.divider()
+    st.sidebar.subheader("📍 Manual Coordinates")
+    st.sidebar.info(f"Image Size: {img_w} x {img_h} px")
+
+    # We use a form so the app doesn't reload on every single keystroke
+    with st.sidebar.form("manual_coords_form"):
+        col_manual_1, col_manual_2 = st.columns(2)
+        with col_manual_1:
+            man_left = st.number_input("Left (x)", min_value=0, max_value=img_w, value=0)
+            man_top = st.number_input("Top (y)", min_value=0, max_value=img_h, value=0)
+        with col_manual_2:
+            man_right = st.number_input("Right", min_value=0, max_value=img_w, value=min(200, img_w))
+            man_bottom = st.number_input("Bottom", min_value=0, max_value=img_h, value=min(200, img_h))
+        
+        apply_manual = st.form_submit_button("Apply Manual Coords")
+
+    # Logic: If user clicked "Apply", calculate the box (left, top, width, height)
+    # and save to session state to force the cropper to update.
+    initial_box = None
+    if apply_manual:
+        width = man_right - man_left
+        height = man_bottom - man_top
+        if width > 0 and height > 0:
+            # (left, top, width, height) is the format st_cropper expects for 'box'
+            st.session_state.crop_coords = (man_left, man_top, width, height)
+            # We create a unique key to force the widget to re-render with new box
+            if 'cropper_key' not in st.session_state: st.session_state.cropper_key = 0
+            st.session_state.cropper_key += 1
+        else:
+            st.sidebar.error("Invalid coordinates (Right must be > Left, Bottom > Top)")
+
+    # --- 4. Interactive Cropper ---
     col1, col2 = st.columns([2, 1])
 
     with col1:
         st.subheader("Draw Crop Box")
-        # st_cropper returns the box coordinates when return_type='box'
-        # realtime_update=True makes the UI feel snappier
+        
+        # Use a dynamic key so we can reset the box programmatically
+        c_key = f"cropper_{st.session_state.get('cropper_key', 0)}"
+
+        # If we have manual coords in state, pass them to 'box'
+        box_args = {}
+        if st.session_state.crop_coords:
+            box_args['box'] = st.session_state.crop_coords
+
         crop_box = st_cropper(
             processed_image,
             realtime_update=True,
             box_color='#FF0000',
-            aspect_ratio=aspect_ratio,
-            return_type='box'
+            return_type='box',
+            key=c_key,
+            **box_args
         )
 
     with col2:
-        st.subheader("Preview Result")
-        # Calculate coordinates from the box dict
-        rect = (
-            crop_box['left'], 
-            crop_box['top'], 
-            crop_box['left'] + crop_box['width'], 
-            crop_box['top'] + crop_box['height']
-        )
+        st.subheader("Preview & Coords")
         
-        # Show what the final single image looks like
+        # Calculate standard PIL coordinates (Left, Top, Right, Bottom)
+        # crop_box returns: left, top, width, height
+        rect_left = crop_box['left']
+        rect_top = crop_box['top']
+        rect_right = crop_box['left'] + crop_box['width']
+        rect_bottom = crop_box['top'] + crop_box['height']
+        
+        rect = (rect_left, rect_top, rect_right, rect_bottom)
+        
+        # Display the coordinates prominently so user can copy them
+        st.code(f"""
+Left:   {rect_left}
+Top:    {rect_top}
+Right:  {rect_right}
+Bottom: {rect_bottom}
+        """, language="yaml")
+        
+        # Show Preview
         preview_crop = processed_image.crop(rect)
-        st.image(preview_crop, caption=f"Result: {preview_crop.size}", use_container_width=True)
+        st.image(preview_crop, caption=f"Size: {preview_crop.size}", use_container_width=True)
 
-    # --- 4. Batch Processing Logic ---
+    # --- 5. Batch Processing ---
     st.divider()
     
-    # We store the processing trigger in a button
-    if st.button(f"🚀 Crop All {len(uploaded_files)} Images & Prepare Download"):
-        
-        # Buffer for the zip file
+    if st.button(f"🚀 Crop All {len(uploaded_files)} Images"):
         zip_buffer = io.BytesIO()
         progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        try:
-            with zipfile.ZipFile(zip_buffer, "w") as zf:
-                for i, file in enumerate(uploaded_files):
-                    status_text.text(f"Processing {file.name}...")
-                    
-                    # 1. Open
+        
+        with zipfile.ZipFile(zip_buffer, "w") as zf:
+            for i, file in enumerate(uploaded_files):
+                try:
                     img = Image.open(file)
-                    
-                    # 2. Rotate (Apply same rotation as reference)
+                    # Apply Rotation
                     if rotate_angle != 0:
                         img = img.rotate(-rotate_angle, expand=True)
                     
-                    # 3. Crop (Apply same coordinates as reference)
-                    # Note: This assumes all images are same size/dimensions.
+                    # Apply Crop
                     cropped_img = img.crop(rect)
                     
-                    # 4. Save to memory buffer
+                    # Save
                     img_byte_arr = io.BytesIO()
-                    
-                    # Detect format (default to PNG if unknown)
                     fmt = file.type.split('/')[-1].upper() if file.type else 'PNG'
                     if fmt == 'JPG': fmt = 'JPEG'
-                    
                     cropped_img.save(img_byte_arr, format=fmt)
                     
-                    # 5. Write to Zip
                     zf.writestr(f"cropped_{file.name}", img_byte_arr.getvalue())
-                    
-                    # Update progress
-                    progress_bar.progress((i + 1) / len(uploaded_files))
-            
-            status_text.success("Processing Complete!")
-            
-            # Show Download Button
-            st.download_button(
-                label="⬇️ Download Cropped Images (ZIP)",
-                data=zip_buffer.getvalue(),
-                file_name="batch_cropped_images.zip",
-                mime="application/zip"
-            )
-            
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
-            st.warning("Note: Batch cropping works best when all uploaded images have the same dimensions.")
+                except Exception as e:
+                    print(f"Error processing {file.name}: {e}")
+                
+                progress_bar.progress((i + 1) / len(uploaded_files))
+        
+        st.success("Done!")
+        st.download_button(
+            label="⬇️ Download ZIP",
+            data=zip_buffer.getvalue(),
+            file_name="batch_cropped.zip",
+            mime="application/zip"
+        )
 
 else:
-    # Empty state
-    st.info("👆 Please upload images in the sidebar or top section to begin.")
+    st.info("👆 Please upload images to begin.")
