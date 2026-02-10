@@ -1,6 +1,6 @@
 import streamlit as st
 from streamlit_cropper import st_cropper
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 import io
 import zipfile
 
@@ -42,14 +42,29 @@ if uploaded_files:
     ref_file = img_map[ref_img_name]
     raw_image = Image.open(ref_file)
     
-    # Rotation
-    rotate_angle = st.sidebar.slider("Rotate (Degrees)", -180, 180, 0, 1)
+    # --- New: Mirror Option ---
+    is_mirrored = st.sidebar.checkbox("🪞 Mirror Image (Flip Horizontal)", value=False)
     
-    # Apply Rotation to Reference
-    if rotate_angle != 0:
-        processed_image = raw_image.rotate(-rotate_angle, expand=True)
+    # --- New: Rotation with Number Input ---
+    # Using number_input allows precise entry vs a slider
+    rotate_angle = st.sidebar.number_input(
+        "Rotate (Degrees)", 
+        min_value=-360, 
+        max_value=360, 
+        value=0,
+        step=1
+    )
+    
+    # --- Apply Transforms to Reference Image ---
+    # 1. Mirror
+    if is_mirrored:
+        processed_image = ImageOps.mirror(raw_image)
     else:
         processed_image = raw_image
+
+    # 2. Rotate
+    if rotate_angle != 0:
+        processed_image = processed_image.rotate(-rotate_angle, expand=True)
 
     img_w, img_h = processed_image.size
 
@@ -136,14 +151,18 @@ if uploaded_files:
                         # 1. Open Image
                         img = Image.open(file)
                         
-                        # 2. Rotate if needed
+                        # 2. Mirror if checked (Must happen before rotation to match preview)
+                        if is_mirrored:
+                            img = ImageOps.mirror(img)
+                        
+                        # 3. Rotate if needed
                         if rotate_angle != 0:
                             img = img.rotate(-rotate_angle, expand=True)
                         
-                        # 3. Crop
+                        # 4. Crop
                         cropped_img = img.crop(rect)
                         
-                        # 4. Save to Buffer
+                        # 5. Save to Buffer
                         img_byte_arr = io.BytesIO()
                         
                         # Determine Format
@@ -152,16 +171,15 @@ if uploaded_files:
                         
                         cropped_img.save(img_byte_arr, format=fmt)
                         
-                        # 5. Fix Filename (Replacing os.path.splitext)
+                        # 6. Fix Filename
                         if "." in file.name:
-                            # Split from the right, max 1 split
                             filename, ext_text = file.name.rsplit(".", 1)
                             ext = f".{ext_text}"
                         else:
                             filename = file.name
                             ext = ""
                         
-                        # 6. Write to Zip with extension at the end
+                        # 7. Write to Zip
                         zf.writestr(f"{filename}_Cropped{ext}", img_byte_arr.getvalue())
 
                     except Exception as e:
