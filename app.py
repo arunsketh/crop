@@ -3,6 +3,7 @@ from streamlit_cropper import st_cropper
 from PIL import Image, ImageDraw
 import io
 import zipfile
+import os  # <--- Added this required import
 
 # Page Config
 st.set_page_config(layout="wide", page_title="Batch Image Cropper")
@@ -45,7 +46,7 @@ if uploaded_files:
     # Rotation
     rotate_angle = st.sidebar.slider("Rotate (Degrees)", -180, 180, 0, 1)
     
-    # Apply Rotation
+    # Apply Rotation to Reference
     if rotate_angle != 0:
         processed_image = raw_image.rotate(-rotate_angle, expand=True)
     else:
@@ -57,10 +58,9 @@ if uploaded_files:
     st.sidebar.divider()
     st.sidebar.subheader("📍 Crop Method")
     
-    # Toggle between Mouse Drawing and Manual Numbers
     crop_mode = st.sidebar.radio("Input Mode", ["Draw Box (Mouse)", "Manual Coordinates (Numbers)"])
 
-    rect = None # This will store final (left, top, right, bottom)
+    rect = None  # Will store (left, top, right, bottom)
 
     col1, col2 = st.columns([2, 1])
 
@@ -68,7 +68,6 @@ if uploaded_files:
     if crop_mode == "Draw Box (Mouse)":
         with col1:
             st.subheader("Draw Crop Box")
-            # The standard library usage without the invalid 'box' argument
             crop_box = st_cropper(
                 processed_image,
                 realtime_update=True,
@@ -76,18 +75,17 @@ if uploaded_files:
                 return_type='box'
             )
             
-            # Extract coordinates from the library's return value
-            rect_left = crop_box['left']
-            rect_top = crop_box['top']
-            rect_right = crop_box['left'] + crop_box['width']
-            rect_bottom = crop_box['top'] + crop_box['height']
+            # Extract coordinates
+            rect_left = int(crop_box['left'])
+            rect_top = int(crop_box['top'])
+            rect_right = int(crop_box['left'] + crop_box['width'])
+            rect_bottom = int(crop_box['top'] + crop_box['height'])
             rect = (rect_left, rect_top, rect_right, rect_bottom)
 
-    # --- MODE B: MANUAL (Custom Implementation) ---
+    # --- MODE B: MANUAL (Custom) ---
     else:
         st.sidebar.info(f"Image Dimensions: {img_w}w x {img_h}h")
         
-        # Manual Inputs
         with st.sidebar.form("manual_coords"):
             col_m1, col_m2 = st.columns(2)
             with col_m1:
@@ -101,29 +99,21 @@ if uploaded_files:
             
         rect = (m_left, m_top, m_right, m_bottom)
 
-        # Since st_cropper can't accept coords, we manually draw the box on the image
-        # so the user can see what they are doing.
         with col1:
             st.subheader("Manual Preview")
             preview_with_box = processed_image.copy()
             draw = ImageDraw.Draw(preview_with_box)
-            
-            # Draw Rectangle (Red, 3px width)
             draw.rectangle(rect, outline="red", width=5)
-            
-            # Show the static image with the drawing
-            st.image(preview_with_box, width="stretch")
+            st.image(preview_with_box, width=None, use_container_width=True)
 
-    # --- 4. Result Preview (Common to both modes) ---
+    # --- 4. Result Preview ---
     with col2:
         st.subheader("Crop Result")
         
-        # Validate coordinates
+        # Validation
         if rect[2] > rect[0] and rect[3] > rect[1]:
             final_crop = processed_image.crop(rect)
-            st.image(final_crop, caption=f"Size: {final_crop.size}", width="stretch")
-            
-            # Display coordinates for copying
+            st.image(final_crop, caption=f"Size: {final_crop.size}", width=None, use_container_width=True)
             st.code(f"L: {rect[0]}\nT: {rect[1]}\nR: {rect[2]}\nB: {rect[3]}")
         else:
             st.warning("Invalid Coordinates! Right must be > Left and Bottom > Top.")
@@ -132,6 +122,7 @@ if uploaded_files:
     st.divider()
     
     if st.button(f"🚀 Crop All {len(uploaded_files)} Images"):
+        # Double check validity before starting loop
         if rect[2] <= rect[0] or rect[3] <= rect[1]:
             st.error("Please select a valid crop area first.")
         else:
@@ -143,24 +134,42 @@ if uploaded_files:
                 for i, file in enumerate(uploaded_files):
                     status_text.text(f"Processing {file.name}...")
                     try:
+                        # 1. Open Image
                         img = Image.open(file)
+                        
+                        # 2. Rotate if needed
                         if rotate_angle != 0:
                             img = img.rotate(-rotate_angle, expand=True)
                         
+                        # 3. Crop
                         cropped_img = img.crop(rect)
                         
+                        # 4. Save to Buffer
                         img_byte_arr = io.BytesIO()
+                        
+                        # Determine Format
+                        # Default to PNG if type is None, handle JPG->JPEG mapping
                         fmt = file.type.split('/')[-1].upper() if file.type else 'PNG'
                         if fmt == 'JPG': fmt = 'JPEG'
+                        
                         cropped_img.save(img_byte_arr, format=fmt)
                         
+                        # 5. Fix Filename (Split name and extension)
+                        filename, ext = os.path.splitext(file.name)
+                        
+                        # 6. Write to Zip with extension at the end
+                        # Result: photo_Cropped.jpg
                         zf.writestr(f"{filename}_Cropped{ext}", img_byte_arr.getvalue())
+
                     except Exception as e:
-                        print(f"Error: {e}")
+                        print(f"Error processing {file.name}: {e}")
                     
+                    # Update Progress
                     progress_bar.progress((i + 1) / len(uploaded_files))
             
             status_text.success("Processing Complete!")
+            
+            # Download Button
             st.download_button(
                 label="⬇️ Download ZIP",
                 data=zip_buffer.getvalue(),
