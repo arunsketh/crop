@@ -3,7 +3,6 @@ from streamlit_cropper import st_cropper
 from PIL import Image, ImageDraw
 import io
 import zipfile
-import os  # <--- Added this required import
 
 # Page Config
 st.set_page_config(layout="wide", page_title="Batch Image Cropper")
@@ -148,17 +147,21 @@ if uploaded_files:
                         img_byte_arr = io.BytesIO()
                         
                         # Determine Format
-                        # Default to PNG if type is None, handle JPG->JPEG mapping
                         fmt = file.type.split('/')[-1].upper() if file.type else 'PNG'
                         if fmt == 'JPG': fmt = 'JPEG'
                         
                         cropped_img.save(img_byte_arr, format=fmt)
                         
-                        # 5. Fix Filename (Split name and extension)
-                        filename, ext = os.path.splitext(file.name)
+                        # 5. Fix Filename (Replacing os.path.splitext)
+                        if "." in file.name:
+                            # Split from the right, max 1 split
+                            filename, ext_text = file.name.rsplit(".", 1)
+                            ext = f".{ext_text}"
+                        else:
+                            filename = file.name
+                            ext = ""
                         
                         # 6. Write to Zip with extension at the end
-                        # Result: photo_Cropped.jpg
                         zf.writestr(f"{filename}_Cropped{ext}", img_byte_arr.getvalue())
 
                     except Exception as e:
