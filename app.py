@@ -154,7 +154,7 @@ if uploaded_files:
                         if fmt == 'JPG': fmt = 'JPEG'
                         cropped_img.save(img_byte_arr, format=fmt)
                         
-                        zf.writestr(f"{file.name}_Cropped", img_byte_arr.getvalue())
+                        zf.writestr(f"{filename}_Cropped{ext}", img_byte_arr.getvalue())
                     except Exception as e:
                         print(f"Error: {e}")
                     
